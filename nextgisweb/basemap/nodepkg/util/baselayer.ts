@@ -27,18 +27,51 @@ const basemapTileQueue = new RequestQueue({
 
 const countTileLoadError = debounce(
   (src: string, timeout: boolean) => {
-    const url = new URL(src);
-    metrics.count(COMP_ID, "tile.error", 1, {
-      attributes: {
+    let attributes: Record<string, string | number | boolean> = {};
+    try {
+      const url = new URL(src);
+      attributes = {
         "tile.origin": url.origin,
         "tile.path": url.pathname + url.search,
-        "tile.timeout": timeout,
-      },
+      };
+    } catch {
+      attributes = {
+        "tile.url": src,
+      };
+    }
+    metrics.count(COMP_ID, "tile.error", 1, {
+      attributes: { ...attributes, "tile.timeout": timeout },
     });
   },
   60_000,
   { trailing: false, leading: true }
 );
+
+// Some basemap URLs, especially old QMS ones, still use HTTP.
+// On HTTPS pages they are blocked as mixed content anyway, so upgrading to HTTPS
+// may fix the layer and cannot make the user experience worse.
+function upgradeBasemapUrlToHttps(url: string): string {
+  const urlLower = url.toLowerCase();
+
+  if (
+    window.location.protocol !== "https:" ||
+    !urlLower.startsWith("http://")
+  ) {
+    return url;
+  }
+
+  try {
+    const tileUrl = new URL(url);
+
+    if (tileUrl.port) {
+      return url;
+    }
+
+    return url.replace("http://", "https://");
+  } catch {
+    return url;
+  }
+}
 
 function basemapTileLoadFunction(tile: Tile, src: string) {
   // @ts-expect-error Property 'getImage' does not exist on type 'Tile'.
@@ -116,6 +149,8 @@ export function prepareBaselayerConfig(
   }
 
   if (source.url) {
+    source.url = upgradeBasemapUrlToHttps(source.url);
+
     source.url = source.url.replace(/\{[XYZQ]\}/g, (c) => c.toLowerCase());
 
     if (qms && !qms.y_origin_top) {
